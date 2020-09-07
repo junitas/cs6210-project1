@@ -29,8 +29,18 @@ int main() {
 
    for(int i = 0;i < numOfDomains; i++) {
    	    printf("\nGetting vCPU info for guest name %s:", virDomainGetName(allDomains[i]));
-   		int res2 = virDomainGetVcpus(allDomains[i], vCpuInfo, 3, *cpuMap, sizeof(*cpuMap));
+   		int vCpuRes = virDomainGetVcpus(allDomains[i], vCpuInfo, 3, *cpuMap, sizeof(*cpuMap));
    		printf("\nvCPU Number: %i, vCpu State: %i, vCpu CPU Time (ns): %llu, pCpu Number: %i\n", vCpuInfo->number, vCpuInfo->state, vCpuInfo->cpuTime, vCpuInfo->cpu);
+
+   		unsigned long vMemRes = virDomainGetMaxMemory(allDomains[i]);
+
+   		virDomainMemoryStatStruct stats[15];
+   		int memStats = virDomainMemoryStats(allDomains[i], stats, 15, 0);
+		printf("\nNumber of stats returned: %i", memStats);
+        for(int i = 0; i < memStats; i++) {
+        	printf("\nTag: %x\nVal: %lli", stats[i].tag, stats[i].val);
+        }
+
 	} 
 
    
