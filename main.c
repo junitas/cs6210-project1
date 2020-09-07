@@ -17,20 +17,21 @@ int main() {
    int numOfDomains = virConnectNumOfDomains(hypervisor);
    printf("\nNumber of domains: %i", numOfDomains);
    printf("\nGetting pointers to all domains...");
-   virDomainPtr** allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
-   int res = virConnectListAllDomains(hypervisor, allDomains, 0);
+   virDomainPtr* allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
+   int res = virConnectListAllDomains(hypervisor, &allDomains, 0);
+   printf("\n%i pointers added to allDomains array.\n", res);
+
 
    virVcpuInfoPtr vCpuInfo = malloc(sizeof(virVcpuInfo));
    unsigned char ** cpuMap = malloc(sizeof(char*));
    int numOfHostCpus = virNodeGetCPUMap(hypervisor, cpuMap, NULL, 0);
    printf("\nFound %i real CPUs on host.\n", numOfHostCpus);
 
-
-   int res2 = virDomainGetVcpus(**allDomains, vCpuInfo, 3, *cpuMap, sizeof(*cpuMap));
-   printf("\nReturn value from virDomainGetVcpus: %i\n", res2);
-
-   printf("\nvCPU Number: %i, vCpu State: %i, vCpu CPU Time (ns): %llu, pCpu Number: %i\n", vCpuInfo->number, vCpuInfo->state, vCpuInfo->cpuTime, vCpuInfo->cpu);
-
+   for(int i = 0;i < numOfDomains; i++) {
+   	    printf("\nGetting vCPU info for guest name %s:", virDomainGetName(allDomains[i]));
+   		int res2 = virDomainGetVcpus(allDomains[i], vCpuInfo, 3, *cpuMap, sizeof(*cpuMap));
+   		printf("\nvCPU Number: %i, vCpu State: %i, vCpu CPU Time (ns): %llu, pCpu Number: %i\n", vCpuInfo->number, vCpuInfo->state, vCpuInfo->cpuTime, vCpuInfo->cpu);
+	} 
 
    
    
