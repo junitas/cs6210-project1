@@ -47,3 +47,30 @@ int main() {
    
    return 0;
 }
+
+private int balanceMemory(virConnectPtr hypervisor) {
+    /***
+        Create map of all guests. What their memory allocation is, 
+        what % of it is being used in them. Be able to compare them
+        all and choose how to balance physical memory allocation.
+    ***/
+
+
+
+
+	return 0;
+}
+
+private int balanceCPU(virConnectPtr hypervisor) {
+	/****
+       Create map of all guest's physical CPU usage.
+       Figure out a way to balance such that every pCpu
+       handles similar amount of workload.
+	****/
+	reutrn 0;
+}
+
+private int balanceManagedResources(virConnectPtr hypervisor) {
+	balanceMemory(hypervisor);
+	balanceCPU(hypervisor);
+}
