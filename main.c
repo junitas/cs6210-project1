@@ -44,35 +44,29 @@ int balanceMemory(virConnectPtr hypervisor) {
 }
 
 int balanceCPU(virConnectPtr hypervisor) {
-	/****
-       Create map of all guest's physical CPU usage.
-       Figure out a way to balance such that every pCpu
-       handles similar amount of workload
-	****/
-
-
-	 /**
-    virConnectNumOfDomains gave me the number of guests I spun
-    up via uvt-kvm.
-    **/
    int numOfDomains = virConnectNumOfDomains(hypervisor);
    printf("\nNumber of domains: %i", numOfDomains);
    printf("\nGetting pointers to all domains...");
    virDomainPtr* allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
    int res = virConnectListAllDomains(hypervisor, &allDomains, VIR_CONNECT_LIST_DOMAINS_ACTIVE);
-   int isBalanced = isCPULoadBalanced(hypervisor, allDomains, numOfDomains);
+   
+   int isBalanced = balanceCpuIfNeeded(hypervisor, allDomains, numOfDomains);
    printf("\nisBalanced: %i\n", isBalanced);
-
-
-
 
 
 	return 0;
 }
 
-void balance(virConnectPtr hypervisor, virDomainPtr* allDomains, int numOfDomains) {
-	   /* to balance: find an empty pCPU, or if there isn't one, find the one iwth the smallest
-    CPU time usage.*/
+void balance(timeMappings) {
+   /** This actually needs vcpu cpumaps to not only know what pCPU
+   is available for pinning, but exactly which vCPU (and its domain) will
+   be pinned to what pCPU.
+   
+   We should already know via timemappings and vCpuMappings arrays which
+   pCPU is available for scheduling. We need to now choose which vCPU to
+   schedule.
+
+   ***/
 }
 
 int balanceManagedResources(virConnectPtr hypervisor) {
@@ -80,7 +74,7 @@ int balanceManagedResources(virConnectPtr hypervisor) {
 	balanceCPU(hypervisor);
 }
 
-int isCPULoadBalanced(virConnectPtr hypervisor, virDomainPtr* allDomains, int numOfDomains) {
+int balanceCpuIfNeeded(virConnectPtr hypervisor, virDomainPtr* allDomains, int numOfDomains) {
    virVcpuInfoPtr vCpuInfo = malloc(sizeof(virVcpuInfo));
    int numOfHostCpus = virNodeGetCPUMap(hypervisor, NULL, NULL, 0);
    printf("\nFound %i real CPUs on host.\n", numOfHostCpus);
@@ -118,7 +112,10 @@ int isCPULoadBalanced(virConnectPtr hypervisor, virDomainPtr* allDomains, int nu
     /** Confirmed the below loop works as expected. **/
     for(int i = 0; i < numOfHostCpus; i++) {
     	if (vCpuMappings[i] > 1 && emptyCpus == 1) balanced = 0;
-	return balanced;
+	}
+
+	if (!balanced) balance(timeMappings, vCpuMappings, numOfHostCpus, allDomains);
+	return 0;
 }
 
 
