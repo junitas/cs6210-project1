@@ -1,4 +1,5 @@
 #include <float.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,15 +21,22 @@ int main() {
    return 0;
 }
 
-void determineVCpuToMove(virVcpuInfoPtr[] allVCpuInfos, int[] vCpuMappings, int numOfHostCpus, int numOfDomains) {
+virVcpuInfoPtr determineVCpuToMove(virVcpuInfoPtr allVCpuInfos[], int vCpuMappings[], int numOfHostCpus, int numOfDomains) {
   int candidatepCpu;
   /** Can further optimize to choose the best pCPU to make room on. **/
   for(int i = 0; i < numOfHostCpus; i++ ) if (vCpuMappings[i] > 1) { candidatepCpu = i; break; }
   virVcpuInfoPtr smallestvCpu;
-  unsigned int smallestvCpuTime = MAX_INT; 
+  unsigned int smallestvCpuTime = INT_MAX;
   for(int i = 0; i < numOfDomains; i++) {
-      if (allVCpuInfos[i]->cpuTime/ONE_MILLION)
+    int time = allVCpuInfos[i]->cpuTime/ONE_MILLION;
+      if ( time < smallestvCpuTime) {
+        smallestvCpuTime = time;
+        smallestvCpu = allVCpuInfos[i];
+      }
   }
+  printf("\nFound a vCPU to move. vCpuInfo:\n");
+  printf("\nvCPU Number: %i, vCpu State: %i, vCpu CPU Time (ms): %llu, pCpu Number: %i\n", smallestvCpu->number, smallestvCpu->state, smallestvCpu->cpuTime / ONE_MILLION, smallestvCpu->cpu);
+  return smallestvCpu;
 
 }
 
@@ -41,7 +49,6 @@ int balanceCPU(virConnectPtr hypervisor) {
    int res = virConnectListAllDomains(hypervisor, &allDomains, VIR_CONNECT_LIST_DOMAINS_ACTIVE);
    
 
-
    balanceCpuIfNeeded(hypervisor, allDomains, numOfDomains);
    
 
@@ -49,7 +56,7 @@ int balanceCPU(virConnectPtr hypervisor) {
 	return 0;
 }
 
-void balance(int vCpuMappings[], int numOfHostCpus, virVcpuInfoPtr allVCpuInfos[], double timeMappings[]) {
+void balance(int vCpuMappings[], int numOfHostCpus, virVcpuInfoPtr allVCpuInfos[], double timeMappings[], int numOfDomains) {
    /** This actually needs vcpu cpumaps to not only know what pCPU
    is available for pinning, but exactly which vCPU (and its domain) will
    be pinned to what pCPU.
@@ -148,7 +155,7 @@ int balanceCpuIfNeeded(virConnectPtr hypervisor, virDomainPtr* allDomains, int n
     printf("\nThreshold time value over which system is unbalanced: %f\n", threshold);
 }
     printf("\nisBalanced: %i\n", balanced);
-	if (!balanced) balance(vCpuMappings, numOfHostCpus, allVCpuInfos, timeMappings);
+	if (!balanced) balance(vCpuMappings, numOfHostCpus, allVCpuInfos, timeMappings, numOfDomains);
 	return 0;
 }
 
