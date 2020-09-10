@@ -4,12 +4,32 @@
 #include <string.h>
 #include <libvirt/libvirt.h>
 
+int ONE_MILLION = 1000000;
+
+/***
+Index is pCPU number. Element at each index is an array of virVCpuInfo structs.
+Each element of the struct array is info about the vCPUs assigned to a pCPU.
+**/
+virVcpuInfoPtr** virtualToPhysicalMap; // danny syas don't do this hhahhaahah
+
 int main() {
    
    virConnectPtr hypervisor = virConnectOpen(NULL);
    balanceCPU(hypervisor);
    int isAlive = virConnectIsAlive(hypervisor); 
    return 0;
+}
+
+void determineVCpuToMove(virVcpuInfoPtr[] allVCpuInfos, int[] vCpuMappings, int numOfHostCpus, int numOfDomains) {
+  int candidatepCpu;
+  /** Can further optimize to choose the best pCPU to make room on. **/
+  for(int i = 0; i < numOfHostCpus; i++ ) if (vCpuMappings[i] > 1) { candidatepCpu = i; break; }
+  virVcpuInfoPtr smallestvCpu;
+  unsigned int smallestvCpuTime = MAX_INT; 
+  for(int i = 0; i < numOfDomains; i++) {
+      if (allVCpuInfos[i]->cpuTime/ONE_MILLION)
+  }
+
 }
 
 
@@ -20,6 +40,8 @@ int balanceCPU(virConnectPtr hypervisor) {
    virDomainPtr* allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
    int res = virConnectListAllDomains(hypervisor, &allDomains, VIR_CONNECT_LIST_DOMAINS_ACTIVE);
    
+
+
    balanceCpuIfNeeded(hypervisor, allDomains, numOfDomains);
    
 
@@ -27,7 +49,7 @@ int balanceCPU(virConnectPtr hypervisor) {
 	return 0;
 }
 
-void balance(int vCpuMappings[], int numOfHostCpus, virDomainPtr* allDomains, double timeMappings[]) {
+void balance(int vCpuMappings[], int numOfHostCpus, virVcpuInfoPtr allVCpuInfos[], double timeMappings[]) {
    /** This actually needs vcpu cpumaps to not only know what pCPU
    is available for pinning, but exactly which vCPU (and its domain) will
    be pinned to what pCPU.
@@ -37,12 +59,12 @@ void balance(int vCpuMappings[], int numOfHostCpus, virDomainPtr* allDomains, do
    schedule.
    ***/
 	/* approaches to knowing which vCPU is where on whic pCPU:
-	1. an array, key: array of struct{virDomainGetName+vCPUNumber}, index: pCPU
-  2. examining CPU map for a vCPU.
+	find the pCPU with > 1 vCPU and highest utilization.
+  Iterate over vCpuInfo array, find all vCPUs on that pCPU, choose the one with the smallest execution time.
   **/
-
+   printf("\nbalance() function.\n");
    int pCpuToPin = -1;
-   // find pCPU to schedule onto, first
+   printf("First attempting to find an empty pCPU to pin to...\n");
    for(int i = 0; i < numOfHostCpus; i++) {
    	if (vCpuMappings[i] == 0) {
    		pCpuToPin = i;
@@ -50,28 +72,36 @@ void balance(int vCpuMappings[], int numOfHostCpus, virDomainPtr* allDomains, do
    	}
    }
    if (pCpuToPin == -1) {
-   	printf("\nNo pCPUs were completely empty. Checking execution times.\n");
+    printf("No empty pCPUs were available. Finding the least utilized one...\n");
    	double min = DBL_MAX;
    	int leastUtilizedpCpu = -1;
    	for(int i = 0; i < numOfHostCpus; i++) {
    		if (timeMappings[i] < min) { min = timeMappings[i]; leastUtilizedpCpu = i; }
    	}
+    printf("Least utilized pCPU: %i\n", leastUtilizedpCpu);
+    pCpuToPin = leastUtilizedpCpu;
    }
-   printf("\npCPU to pin a vCPU to: %i \n", pCpuToPin);
+   printf("\npCPU to pin a vCPU to: %i", pCpuToPin);
+   printf("Finding which vCPU to pin to pCPU %i...\n", pCpuToPin);
+   virVcpuInfoPtr vCpuToMove = determineVCpuToMove(allVCpuInfos, vCpuMappings, numOfHostCpus, numOfDomains);
 }
 
 
 int balanceCpuIfNeeded(virConnectPtr hypervisor, virDomainPtr* allDomains, int numOfDomains) {
    virVcpuInfoPtr vCpuInfo = malloc(sizeof(virVcpuInfo));
+   virVcpuInfoPtr allVCpuInfos[numOfDomains]; // assume 1 vCPU per domain.
    int numOfHostCpus = virNodeGetCPUMap(hypervisor, NULL, NULL, 0);
    printf("\nFound %i real CPUs on host.\n", numOfHostCpus);
+
+
+   
 
    /** Variable timeMappings is a map of total vCPU CPU time for
        each pCPU. The index of this array is the number assigned
        to the pCPU. The contents of the array at each index are
        the cumulative CPU time across all domains for that pCPU.
        **/
-   double timeMappings[numOfHostCpus];
+   double timeMappings[numOfHostCpus]; // in ms
    memset(timeMappings, 0, numOfHostCpus*sizeof(double));
 
    /** Variable vCpuMappings is a map of total number of vCPUs
@@ -87,24 +117,40 @@ int balanceCpuIfNeeded(virConnectPtr hypervisor, virDomainPtr* allDomains, int n
    	 // they confirmed we assume 1 vCPU per VM.
    	    unsigned char ** unknownCpuMap = malloc(sizeof(char*));
    		int vCpuRes = virDomainGetVcpus(allDomains[i], vCpuInfo, 3, *unknownCpuMap, sizeof(*unknownCpuMap)); // what does cpumap do here?
-   		printf("\nvCPU Number: %i, vCpu State: %i, vCpu CPU Time (ns): %llu, pCpu Number: %i\n", vCpuInfo->number, vCpuInfo->state, vCpuInfo->cpuTime, vCpuInfo->cpu);
-	    timeMappings[vCpuInfo->cpu] = timeMappings[vCpuInfo->cpu] + vCpuInfo->cpuTime;
+   		printf("\nvCPU Number: %i, vCpu State: %i, vCpu CPU Time (ms): %llu, pCpu Number: %i\n", vCpuInfo->number, vCpuInfo->state, vCpuInfo->cpuTime / ONE_MILLION, vCpuInfo->cpu);
+	    timeMappings[vCpuInfo->cpu] = timeMappings[vCpuInfo->cpu] + (vCpuInfo->cpuTime/ONE_MILLION);
 	    vCpuMappings[vCpuInfo->cpu] = vCpuMappings[vCpuInfo->cpu] + 1;
+      allVCpuInfos[i] = vCpuInfo;    
 	}
+
 
      //If ANY pCPU has more than one vCPU AND there are empty pCPUs, unbalanced. 
+  // If there are no empty CPUs, and a pCPU has > 1 vCPU, check time usage. 
     int emptyCpus = 0;
     int balanced = 1;
+    int pCpuWithMoreThanOnevCpu = 0;
+
     for(int i = 0; i < numOfHostCpus; i++) if (vCpuMappings[i] == 0) emptyCpus = 1;
-    /** Confirmed the below loop works as expected. **/
     for(int i = 0; i < numOfHostCpus; i++) {
+      if (vCpuMappings[i] > 1) pCpuWithMoreThanOnevCpu = 1;
     	if (vCpuMappings[i] > 1 && emptyCpus == 1) balanced = 0;
 	}
+  if (balanced && emptyCpus == 0 && pCpuWithMoreThanOnevCpu == 1) {
+    printf("\nThere are no empty pCPUs, and some pCPUs have more than one vCPU.\n");
+    printf("\nFinding balance based on time usage...\n");
+    unsigned int averageTime;
+    for(int i = 0; i < numOfHostCpus; i++) averageTime = averageTime + timeMappings[i];
+    averageTime = averageTime / numOfHostCpus;
+    printf("\nAverage time: %i", averageTime);
+    double unbalancedPercent = 0.1;
+    double threshold = averageTime + (averageTime*unbalancedPercent);
+    for(int i = 0; i < numOfHostCpus; i++) if (timeMappings[i] > threshold) balanced = 0;
+    printf("\nThreshold time value over which system is unbalanced: %f\n", threshold);
+}
     printf("\nisBalanced: %i\n", balanced);
-	if (!balanced) balance(vCpuMappings, numOfHostCpus, allDomains, timeMappings);
+	if (!balanced) balance(vCpuMappings, numOfHostCpus, allVCpuInfos, timeMappings);
 	return 0;
 }
-
 
 /****
 
@@ -182,7 +228,7 @@ What if # of pCPUs >> vCPUs?
  to pCPU 0. Is that a special case? Is the balancing algorithm:
 
  1. Distribute vCPUs such that every vCPU has its own dedicated pCPU.
- 2. When pCPUs are full, then destribute based on execution time.
+ 2. When pCPUs are full, then distribute based on execution time.
     For each pCPU that has > 1 vCPU:
      a. Find a new place for the vCPU (the pCPU with the smallest CPU time usage)
      b. Pin the vCPU to that new pCPU. 
