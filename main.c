@@ -1,3 +1,4 @@
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,41 +8,10 @@ int main() {
    
    virConnectPtr hypervisor = virConnectOpen(NULL);
    balanceCPU(hypervisor);
-   int isAlive = virConnectIsAlive(hypervisor);
-   /*if (isAlive) {
-   	printf("Connection to hypervisor made successfully.");
-   }*/
-
-  
-   
-   
+   int isAlive = virConnectIsAlive(hypervisor); 
    return 0;
 }
 
-int balanceMemory(virConnectPtr hypervisor) {
-    /***
-        Create map of all guests. What their memory allocation is, 
-        what % of it is being used in them. Be able to compare them
-        all and choose how to balance physical memory allocation.
-    ***/
-/*
-   int numOfDomains = virConnectNumOfDomains(hypervisor);
-   printf("\nNumber of domains: %i", numOfDomains);
-   printf("\nGetting pointers to all domains...");
-   virDomainPtr* allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
-
-    unsigned long vMemRes = virDomainGetMaxMemory(allDomains[i]);
-
-   		virDomainMemoryStatStruct stats[15];
-   		int memStats = virDomainMemoryStats(allDomains[i], stats, 15, 0);
-		printf("\nNumber of stats returned: %i", memStats);
-        for(int i = 0; i < memStats; i++) {
-        	printf("\nTag: %x\nVal: %lli", stats[i].tag, stats[i].val);
-        }
-
-*/
-	return 0;
-}
 
 int balanceCPU(virConnectPtr hypervisor) {
    int numOfDomains = virConnectNumOfDomains(hypervisor);
@@ -50,14 +20,14 @@ int balanceCPU(virConnectPtr hypervisor) {
    virDomainPtr* allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
    int res = virConnectListAllDomains(hypervisor, &allDomains, VIR_CONNECT_LIST_DOMAINS_ACTIVE);
    
-   int isBalanced = balanceCpuIfNeeded(hypervisor, allDomains, numOfDomains);
-   printf("\nisBalanced: %i\n", isBalanced);
+   balanceCpuIfNeeded(hypervisor, allDomains, numOfDomains);
+   
 
 
 	return 0;
 }
 
-void balance(timeMappings) {
+void balance(int vCpuMappings[], int numOfHostCpus, virDomainPtr* allDomains, double timeMappings[]) {
    /** This actually needs vcpu cpumaps to not only know what pCPU
    is available for pinning, but exactly which vCPU (and its domain) will
    be pinned to what pCPU.
@@ -65,14 +35,31 @@ void balance(timeMappings) {
    We should already know via timemappings and vCpuMappings arrays which
    pCPU is available for scheduling. We need to now choose which vCPU to
    schedule.
-
    ***/
+	/* approaches to knowing which vCPU is where on whic pCPU:
+	1. an array, key: array of struct{virDomainGetName+vCPUNumber}, index: pCPU
+  2. examining CPU map for a vCPU.
+  **/
+
+   int pCpuToPin = -1;
+   // find pCPU to schedule onto, first
+   for(int i = 0; i < numOfHostCpus; i++) {
+   	if (vCpuMappings[i] == 0) {
+   		pCpuToPin = i;
+   		break;
+   	}
+   }
+   if (pCpuToPin == -1) {
+   	printf("\nNo pCPUs were completely empty. Checking execution times.\n");
+   	double min = DBL_MAX;
+   	int leastUtilizedpCpu = -1;
+   	for(int i = 0; i < numOfHostCpus; i++) {
+   		if (timeMappings[i] < min) { min = timeMappings[i]; leastUtilizedpCpu = i; }
+   	}
+   }
+   printf("\npCPU to pin a vCPU to: %i \n", pCpuToPin);
 }
 
-int balanceManagedResources(virConnectPtr hypervisor) {
-	balanceMemory(hypervisor);
-	balanceCPU(hypervisor);
-}
 
 int balanceCpuIfNeeded(virConnectPtr hypervisor, virDomainPtr* allDomains, int numOfDomains) {
    virVcpuInfoPtr vCpuInfo = malloc(sizeof(virVcpuInfo));
@@ -113,8 +100,8 @@ int balanceCpuIfNeeded(virConnectPtr hypervisor, virDomainPtr* allDomains, int n
     for(int i = 0; i < numOfHostCpus; i++) {
     	if (vCpuMappings[i] > 1 && emptyCpus == 1) balanced = 0;
 	}
-
-	if (!balanced) balance(timeMappings, vCpuMappings, numOfHostCpus, allDomains);
+    printf("\nisBalanced: %i\n", balanced);
+	if (!balanced) balance(vCpuMappings, numOfHostCpus, allDomains, timeMappings);
 	return 0;
 }
 
@@ -201,3 +188,29 @@ What if # of pCPUs >> vCPUs?
      b. Pin the vCPU to that new pCPU. 
 
 ***/
+
+
+int balanceMemory(virConnectPtr hypervisor) {
+    /***
+        Create map of all guests. What their memory allocation is, 
+        what % of it is being used in them. Be able to compare them
+        all and choose how to balance physical memory allocation.
+    ***/
+/*
+   int numOfDomains = virConnectNumOfDomains(hypervisor);
+   printf("\nNumber of domains: %i", numOfDomains);
+   printf("\nGetting pointers to all domains...");
+   virDomainPtr* allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
+
+    unsigned long vMemRes = virDomainGetMaxMemory(allDomains[i]);
+
+   		virDomainMemoryStatStruct stats[15];
+   		int memStats = virDomainMemoryStats(allDomains[i], stats, 15, 0);
+		printf("\nNumber of stats returned: %i", memStats);
+        for(int i = 0; i < memStats; i++) {
+        	printf("\nTag: %x\nVal: %lli", stats[i].tag, stats[i].val);
+        }
+
+*/
+	return 0;
+}

@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-I. -lvirt
+CFLAGS=-I. -lvirt -Wno-implicit-function-declaration
 DEPS = main.h
 OBJ = main.o
 
