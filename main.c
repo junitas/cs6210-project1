@@ -5,7 +5,11 @@
 #include <string.h>
 #include <libvirt/libvirt.h>
 
+#define BIT_SET(a,b) ((a) |= (1ULL<<(b)))
+
 int ONE_MILLION = 1000000;
+
+virDomainPtr* allDomains;
 
 /***
 Index is pCPU number. Element at each index is an array of virVCpuInfo structs.
@@ -21,7 +25,7 @@ int main() {
    return 0;
 }
 
-virVcpuInfoPtr determineVCpuToMove(virVcpuInfoPtr allVCpuInfos[], int vCpuMappings[], int numOfHostCpus, int numOfDomains) {
+virVcpuInfoPtr determineVCpuToMove(virVcpuInfoPtr allVCpuInfos[], int vCpuMappings[], int numOfHostCpus, int numOfDomains, virDomainPtr domainToMove) {
   int candidatepCpu;
   /** Can further optimize to choose the best pCPU to make room on. **/
   for(int i = 0; i < numOfHostCpus; i++ ) if (vCpuMappings[i] > 1) { candidatepCpu = i; break; }
@@ -32,12 +36,13 @@ virVcpuInfoPtr determineVCpuToMove(virVcpuInfoPtr allVCpuInfos[], int vCpuMappin
       if ( time < smallestvCpuTime) {
         smallestvCpuTime = time;
         smallestvCpu = allVCpuInfos[i];
+        domainToMove = allDomains[i];
       }
   }
   printf("\nFound a vCPU to move. vCpuInfo:\n");
   printf("\nvCPU Number: %i, vCpu State: %i, vCpu CPU Time (ms): %llu, pCpu Number: %i\n", smallestvCpu->number, smallestvCpu->state, smallestvCpu->cpuTime / ONE_MILLION, smallestvCpu->cpu);
+  printf("\nvCpu to move is on domain: %s\n", virDomainGetName(domainToMove));
   return smallestvCpu;
-
 }
 
 
@@ -45,7 +50,7 @@ int balanceCPU(virConnectPtr hypervisor) {
    int numOfDomains = virConnectNumOfDomains(hypervisor);
    printf("\nNumber of domains: %i", numOfDomains);
    printf("\nGetting pointers to all domains...");
-   virDomainPtr* allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
+   allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
    int res = virConnectListAllDomains(hypervisor, &allDomains, VIR_CONNECT_LIST_DOMAINS_ACTIVE);
    
 
@@ -56,7 +61,12 @@ int balanceCPU(virConnectPtr hypervisor) {
 	return 0;
 }
 
-void balance(int vCpuMappings[], int numOfHostCpus, virVcpuInfoPtr allVCpuInfos[], double timeMappings[], int numOfDomains) {
+void balance(int vCpuMappings[],
+             int numOfHostCpus,
+             virVcpuInfoPtr allVCpuInfos[],
+             double timeMappings[],
+             int numOfDomains,
+             virDomainPtr* allDomains) {
    /** This actually needs vcpu cpumaps to not only know what pCPU
    is available for pinning, but exactly which vCPU (and its domain) will
    be pinned to what pCPU.
@@ -90,7 +100,18 @@ void balance(int vCpuMappings[], int numOfHostCpus, virVcpuInfoPtr allVCpuInfos[
    }
    printf("\npCPU to pin a vCPU to: %i", pCpuToPin);
    printf("Finding which vCPU to pin to pCPU %i...\n", pCpuToPin);
-   virVcpuInfoPtr vCpuToMove = determineVCpuToMove(allVCpuInfos, vCpuMappings, numOfHostCpus, numOfDomains);
+  
+   virDomainPtr domainToMove; // OUT ARG
+   virVcpuInfoPtr vCpuToMove = determineVCpuToMove(allVCpuInfos, vCpuMappings, numOfHostCpus, numOfDomains, domainToMove);
+   pinvCpuTopCPU(vCpuToMove, pCpuToPin, domainToMove);
+}
+
+void pinvCpuTopCPU(virVcpuInfoPtr vCpu, int pCpu, virDomainPtr domain) {
+     unsigned char cpuMap[1] = { 0 };
+     int n = 8;
+     BIT_SET(cpuMap[0], 7 - pCpu);
+     int res = virDomainPinVcpu(domain, vCpu->number, cpuMap, 1);
+     printf("\nReturn code from virDomainPinVcpu: %i \n", res);
 }
 
 
@@ -155,7 +176,7 @@ int balanceCpuIfNeeded(virConnectPtr hypervisor, virDomainPtr* allDomains, int n
     printf("\nThreshold time value over which system is unbalanced: %f\n", threshold);
 }
     printf("\nisBalanced: %i\n", balanced);
-	if (!balanced) balance(vCpuMappings, numOfHostCpus, allVCpuInfos, timeMappings, numOfDomains);
+	if (!balanced) balance(vCpuMappings, numOfHostCpus, allVCpuInfos, timeMappings, numOfDomains, allDomains);
 	return 0;
 }
 
