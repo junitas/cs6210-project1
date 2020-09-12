@@ -14,16 +14,36 @@ virDomainPtr* allDomains;
 virConnectPtr hypervisor;
 int numOfHostCpus;
 
+/***
+TODO: 
 
+getting invalid domain stuff. refresh
+allDomains on every run, make sure no memory leaks here or problems.
+
+It looks like when there are empty pCPUs it's scheduling to them.
+
+pCPU 0 has many domains binded to it. 
+pCPU 1 and 2 have 3 total, and vCPUs keep switching between them. keeps finding
+pCP 1 and 2 to be candidates, because 0 is full. but it's not choosing a vCPU
+from 0, it's choosing the "smallest" one, which is on 1 or 2, not 0.
+
+
+**/
 int main() {
    
-   hypervisor = virConnectOpen(NULL);
-   balanceCPU(hypervisor);
+   while(1) {
+      hypervisor = virConnectOpen(NULL);
+      balanceCPU(hypervisor);
+      for(int i = 0; i < numOfDomains; i++) virDomainFree(allDomains[i]);
+      virConnectClose(hypervisor);
+      sleep(1);
+ }
    int isAlive = virConnectIsAlive(hypervisor); 
    return 0;
 }
 
-int determineVCpuToMove(virDomainPtr *domainToMove, int vCpuMappings[]) {
+/** Find vCPU with smallest time on busiest pCPU **/
+int determineVCpuToMove(virDomainPtr *domainToMove, int vCpuMappings[], double timeMappings[]) {
   // BUG: least utilized vCPU should NOT be moved if it has a dedicated pCPU!
   int candidatepCpu;
   int hostCpus[numOfHostCpus];
@@ -41,17 +61,22 @@ int determineVCpuToMove(virDomainPtr *domainToMove, int vCpuMappings[]) {
   virVcpuInfoPtr smallestVCpuInfo = calloc(1, sizeof(virVcpuInfoPtr));
   virDomainPtr smallestDomain;
   unsigned int smallestvCpuTime = INT_MAX;
+  int busiestpCPU = -1;
+  double busiestpCPUTime = 0;
+  for(int i = 0; i < numOfHostCpus; i++) {
+     if (timeMappings[i] > busiestpCPUTime) { busiestpCPUTime = timeMappings[i]; busiestpCPU = i; }
+  }
   for(int i = 0; i < numOfDomains; i++) {
     virDomainGetVcpus(allDomains[i], smallestVCpuInfo, 1, NULL, 0);
     int time = (smallestVCpuInfo->cpuTime)/ONE_MILLION;
-      if ( time < smallestvCpuTime && vCpuMappings[smallestVCpuInfo->cpu] > 1) {
-        printf("new smallest time: %i on domain: %s\n", time, virDomainGetName(allDomains[i]));
+      if ( smallestVCpuInfo->cpu == busiestpCPU && time < smallestvCpuTime && vCpuMappings[smallestVCpuInfo->cpu] > 1) {
         smallestvCpuTime = time;
         smallestvCpu = smallestVCpuInfo->number;
         *domainToMove = allDomains[i];
       }
       smallestVCpuInfo = calloc(1, sizeof(virVcpuInfoPtr));
   }
+  printf("\nMoving vCPU from domain %s off of pCPU %i...", virDomainGetName(*domainToMove), busiestpCPU);
   return smallestvCpu;
 }
 
@@ -72,22 +97,15 @@ int balanceCPU(virConnectPtr hypervisor) {
 }
 
 void pinvCpuTopCPU(int vCpu, int pCpu, virDomainPtr domain) {
-    printf("pinvCpuTopCPU()\n");
-    printf("domain: %s\n",  virDomainGetName(domain));
     int maxInfo = 1;
     int mapLen = 1;
     unsigned char * cpuMap = calloc(maxInfo, mapLen);
-    printf("allocated cpumap...\n");
     virVcpuInfoPtr vCpuInfo = calloc(1, sizeof(virVcpuInfoPtr));
-    printf("allocated vcpuinfo...\n");
 
     int vCpuRes = virDomainGetVcpus(domain, vCpuInfo, maxInfo, cpuMap, mapLen);
-    printf("Returned cpuMap: %X\n", cpuMap[0]);
     int n = 8;
     cpuMap[0] = cpuMap[0] & 0;
-    printf("Zeroed cpuMap: %X\n", cpuMap[0]);
     BIT_SET(cpuMap[0], pCpu);
-    printf("Passing cpuMap: %X\n", cpuMap[0]);
     int res = virDomainPinVcpu(domain, vCpu, cpuMap, mapLen);
     printf("\nReturn code from virDomainPinVcpu: %i \n", res);
 }
@@ -115,10 +133,10 @@ void balance(int vCpuMappings[],
     pCpuToPin = leastUtilizedpCpu;
    }
    printf("\npCPU to pin a vCPU to: %i", pCpuToPin);
-   printf("Finding which vCPU to pin to pCPU %i...\n", pCpuToPin);
+   printf("\nFinding which vCPU to pin...");
   
    virDomainPtr domainToMove; // OUT ARG
-   int vCpuToMove = determineVCpuToMove(&domainToMove, vCpuMappings);
+   int vCpuToMove = determineVCpuToMove(&domainToMove, vCpuMappings, timeMappings);
 
    pinvCpuTopCPU(vCpuToMove, pCpuToPin, domainToMove);
 }
@@ -170,9 +188,11 @@ int balanceCpuIfNeeded(virConnectPtr hypervisor, int numOfDomains) {
     printf("\nThere are no empty pCPUs, and some pCPUs have more than one vCPU.\n");
     printf("\nFinding balance based on time usage...\n");
     unsigned int averageTime;
+    // this shows that we're getting a pretty good estimate of pCPU usage here.
+    for(int i = 0; i < numOfHostCpus; i++) printf("pCPU %i time usage: %f\n", i, timeMappings[i]);
     for(int i = 0; i < numOfHostCpus; i++) averageTime = averageTime + timeMappings[i];
     averageTime = averageTime / numOfHostCpus;
-    printf("\nAverage time: %i", averageTime);
+    printf("\nAverage time for pCPUs: %i", averageTime);
     double unbalancedPercent = 0.1;
     double threshold = averageTime + (averageTime*unbalancedPercent);
     for(int i = 0; i < numOfHostCpus; i++) if (timeMappings[i] > threshold) balanced = 0;
@@ -181,6 +201,15 @@ int balanceCpuIfNeeded(virConnectPtr hypervisor, int numOfDomains) {
     printf("\nisBalanced: %i\n", balanced);
 	if (!balanced) balance(vCpuMappings, allVCpuInfos, timeMappings);
 	return 0;
+}
+
+
+void cpuStats() {
+  int nparams = 1;
+  int pcpunum = 0;
+  virNodeCPUStatsPtr params = params = malloc(sizeof(virNodeCPUStats) * nparams);
+  int res = virNodeGetCPUStats(hypervisor,0, params, &nparams,0);
+  printf("\ncpuStats(): res: %i\nfield: %s\nvalue: %lli\n", res, params->field, params->value);
 }
 
 
