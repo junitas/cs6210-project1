@@ -1,10 +1,9 @@
 CC=gcc
 CFLAGS=-I. -lvirt -Wno-implicit-function-declaration
-DEPS = main.h
-OBJ = main.o
+OBJ = vcpu_scheduler.o
 
-%.o: %.c $(DEPS)
+%.o: %.c
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-main: $(OBJ)
+vcpu_scheduler: $(OBJ)
 	$(CC) -o $@ $^ $(CFLAGS)

@@ -15,28 +15,31 @@ virConnectPtr hypervisor;
 int numOfHostCpus;
 
 /***
-TODO: 
-
-getting invalid domain stuff. refresh
-allDomains on every run, make sure no memory leaks here or problems.
-
-It looks like when there are empty pCPUs it's scheduling to them.
-
-pCPU 0 has many domains binded to it. 
-pCPU 1 and 2 have 3 total, and vCPUs keep switching between them. keeps finding
-pCP 1 and 2 to be candidates, because 0 is full. but it's not choosing a vCPU
-from 0, it's choosing the "smallest" one, which is on 1 or 2, not 0.
-
-
+STATUS 9/13/2020:
+on 4 pCPUs test 5 seems like its good?
+pins do change somewhat. check it.
 **/
-int main() {
+int main(int argc, char *argv[]) {
+
+  if (argc < 2) {
+    printf("Missing command line args.\n");
+    exit(-1);
+  }
+
+  int sleepInterval = atoi(argv[1]);
+  if (sleepInterval == 0) {
+    printf("Invalid sleep interval passed to program.\n");
+    printf("Sleep interval: %s\n", argv[1]);
+    exit(-1);
+  }
+  printf("Sleep interval: %i\n", sleepInterval);
    
    while(1) {
       hypervisor = virConnectOpen(NULL);
       balanceCPU(hypervisor);
       for(int i = 0; i < numOfDomains; i++) virDomainFree(allDomains[i]);
       virConnectClose(hypervisor);
-      sleep(1);
+      sleep(sleepInterval);
  }
    int isAlive = virConnectIsAlive(hypervisor); 
    return 0;
@@ -200,40 +203,5 @@ int balanceCpuIfNeeded(virConnectPtr hypervisor, int numOfDomains) {
 }
     printf("\nisBalanced: %i\n", balanced);
 	if (!balanced) balance(vCpuMappings, allVCpuInfos, timeMappings);
-	return 0;
-}
-
-
-void cpuStats() {
-  int nparams = 1;
-  int pcpunum = 0;
-  virNodeCPUStatsPtr params = params = malloc(sizeof(virNodeCPUStats) * nparams);
-  int res = virNodeGetCPUStats(hypervisor,0, params, &nparams,0);
-  printf("\ncpuStats(): res: %i\nfield: %s\nvalue: %lli\n", res, params->field, params->value);
-}
-
-
-int balanceMemory(virConnectPtr hypervisor) {
-    /***
-        Create map of all guests. What their memory allocation is, 
-        what % of it is being used in them. Be able to compare them
-        all and choose how to balance physical memory allocation.
-    ***/
-/*
-   int numOfDomains = virConnectNumOfDomains(hypervisor);
-   printf("\nNumber of domains: %i", numOfDomains);
-   printf("\nGetting pointers to all domains...");
-   virDomainPtr* allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
-
-    unsigned long vMemRes = virDomainGetMaxMemory(allDomains[i]);
-
-   		virDomainMemoryStatStruct stats[15];
-   		int memStats = virDomainMemoryStats(allDomains[i], stats, 15, 0);
-		printf("\nNumber of stats returned: %i", memStats);
-        for(int i = 0; i < memStats; i++) {
-        	printf("\nTag: %x\nVal: %lli", stats[i].tag, stats[i].val);
-        }
-
-*/
 	return 0;
 }
