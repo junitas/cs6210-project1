@@ -35,6 +35,8 @@ int printMemoryStats() {
 		unsigned long long balloonSize = DEFAULT_DEBUG_VALUE;
 		unsigned long long usable = DEFAULT_DEBUG_VALUE;
 
+        // SHOULD I BE CALLING VIRDOMAINGETINFO HERE?
+       
 		for(int j = 0; j < numRet; j++) {
 			virDomainMemoryStatStruct s = stats[i];
 			if (s.tag == VIR_DOMAIN_MEMORY_STAT_UNUSED) unused = s.val;
@@ -119,4 +121,25 @@ virDomainSetMaxMemory(....)
 int	virDomainSetMemory(...)
 int	virDomainSetMemoryFlags(...)
 int	virDomainSetMemoryParameters(...)
+**/
+
+
+/***
+
+virDomainInfo ¶
+struct virDomainInfo {
+unsigned char	state	
+the running state, one of virDomainState
+unsigned long	maxMem	
+the maximum memory in KBytes allowed
+unsigned long	memory	
+the memory in KBytes used by the domain
+unsigned short	nrVirtCpu	
+the number of virtual CPUs for the domain
+unsigned long long	cpuTime	
+the CPU time used in nanoseconds
+} 
+
+
+
 **/
