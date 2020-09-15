@@ -11,7 +11,9 @@
 
 #define DEFAULT_DEBUG_VALUE 69
 
-double MEMORY_USAGE_RED_ALERT = 75;
+double MEMORY_USAGE_RED_ALERT = 80;
+int PAGE_SIZE_IN_KB = 4;
+int PAGES_TO_ALLOCATE_AT_ONCE = 2000;
 
 int numOfDomains;
 virDomainPtr* allDomains;
@@ -40,8 +42,10 @@ int domainToTakeFrom() {
 
 
 int giveAdditionalMemory(domainMemoryNeeds domainToGiveMemory) {
+	printf("Attempting to set memory of domain to %llukB\n", domainToGiveMemory.memoryNeededToGetToThreshold);
 	int res = virDomainSetMemory(allDomains[domainToGiveMemory.domainNumber],
 		  domainToGiveMemory.memoryNeededToGetToThreshold);
+	if (res != 0) printf("virDomainSetMemory failed.\n");
 	return res;
 }
 
@@ -73,7 +77,7 @@ domainMemoryNeeds domainNeedsMemory() {
              highestMemoryUsageRatio = r;
              domainToGiveMemory.domainNumber = i;
              domainToGiveMemory.domainUsageRatio = r;
-             domainToGiveMemory.memoryNeededToGetToThreshold = available + (-1)*((available*(MEMORY_USAGE_RED_ALERT-100))/100);
+			domainToGiveMemory.memoryNeededToGetToThreshold = unused + (-1)*((available*(MEMORY_USAGE_RED_ALERT-100))/100);
 		}
 
 	}
@@ -124,6 +128,8 @@ int printMemoryStats() {
 			if (s.tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON) balloonSize = s.val;
 			if (s.tag == VIR_DOMAIN_MEMORY_STAT_USABLE) usable = s.val;
 		}
+		int r = virDomainGetMaxMemory(allDomains[i]);
+		printf("Value returned from virDomainGetMaxMemory: %u\n", r);
 		printf("Memory left unused by domain: %llukB\n", unused);
 		printf("Memory usable by domain:      %llukB\n", available);
 		printf("Current balloon size:         %llukB\n", balloonSize);
@@ -133,15 +139,63 @@ int printMemoryStats() {
 }
 
 
+int balanceMemoryExp() {
+		for(int i = 0; i < numOfDomains; i++) {
+		virDomainMemoryStatPtr stats = calloc(VIR_DOMAIN_MEMORY_STAT_NR, sizeof(virDomainMemoryStatStruct));
+		int maxMem = virDomainGetMaxMemory(allDomains[i]);
+		int numRet = virDomainMemoryStats(allDomains[i], stats, VIR_DOMAIN_MEMORY_STAT_NR, 0);
+		unsigned long long unused = DEFAULT_DEBUG_VALUE;
+		unsigned long long available = DEFAULT_DEBUG_VALUE;
+		unsigned long long balloonSize = DEFAULT_DEBUG_VALUE;
+		unsigned long long usable = DEFAULT_DEBUG_VALUE;
+       
+		for(int j = 0; j < numRet; j++) {
+			virDomainMemoryStatStruct s = stats[j];
+			if (s.tag == VIR_DOMAIN_MEMORY_STAT_UNUSED) unused = s.val;
+			if (s.tag == VIR_DOMAIN_MEMORY_STAT_AVAILABLE) available = s.val;
+			if (s.tag == VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON) balloonSize = s.val;
+			if (s.tag == VIR_DOMAIN_MEMORY_STAT_USABLE) usable = s.val;
+		}
+
+		
+        double r = (100.0) - ((float)unused/(float)(available))*(100);
+		if ( r <  MEMORY_USAGE_RED_ALERT ) takeMemoryAway(allDomains[i], balloonSize);
+		if ( r > MEMORY_USAGE_RED_ALERT ) giveMemory(allDomains[i], balloonSize);
+
+	}
+}
+
+void giveMemory(virDomainPtr domain, unsigned long long balloonSize) {
+	// basing it off of balloon size works which makes no sense. whatever.
+	printf("Giving domain %s %i kB\n", virDomainGetName(domain), PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE);
+	//int res = virDomainSetMemory(domain, unused + (PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE));
+	//if (res != 0) printf("virDomainSetMemory failed.\n");
+	//int res = virDomainSetMemoryFlags(domain, available + (PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE), VIR_DOMAIN_AFFECT_LIVE);
+	// it looks like this sets the memory size of the balloon.
+	int res = virDomainSetMemoryFlags(domain, balloonSize + (PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE), VIR_DOMAIN_AFFECT_LIVE);
+	if (res != 0) printf("virDomainSetMemory failed.\n");
+
+	return;
+}
+
+void takeMemoryAway(virDomainPtr domain, unsigned long long balloonSize) {
+	printf("Taking from domain %s %i kB\n", virDomainGetName(domain), PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE);
+	int res = virDomainSetMemoryFlags(domain, balloonSize - (PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE), VIR_DOMAIN_AFFECT_LIVE);
+	if (res != 0) printf("virDomainSetMemory failed.\n");
+	return;
+}
+
+
 int main(int argc, char * argv) {
 	  while(1) {
       hypervisor = virConnectOpen(NULL);
 
       populateAllDomainsArray();
-      for(int i = 0; i < numOfDomains; i++) virDomainSetMemoryStatsPeriod(allDomains[i], 1, 0);
+      for(int i = 0; i < numOfDomains; i++) virDomainSetMemoryStatsPeriod(allDomains[i], 1, VIR_DOMAIN_AFFECT_LIVE);
       sleep(2);
       printMemoryStats();
-      balanceMemory();
+      //balanceMemory();
+      balanceMemoryExp();
       freeAllDomainPointers();
       virConnectClose(hypervisor);
       sleep(5);	
@@ -195,34 +249,25 @@ memory resources in a guest are insufficient.
 /***
 
 
-Possibly important functions for this:
-
-virDomainSetMemoryStatsPeriod(...) // called out by profs
-virDomainGetMaxMemory(...)
-virDomainMemoryStats(...) -> virDomainMemoryStatTags
-virDomainSetMaxMemory(....)			
-int	virDomainSetMemory(...)
-int	virDomainSetMemoryFlags(...)
-int	virDomainSetMemoryParameters(...)
-**/
-
-
 /***
+9-15-2020:
 
-virDomainInfo ¶
-struct virDomainInfo {
-unsigned char	state	
-the running state, one of virDomainState
-unsigned long	maxMem	
-the maximum memory in KBytes allowed
-unsigned long	memory	
-the memory in KBytes used by the domain
-unsigned short	nrVirtCpu	
-the number of virtual CPUs for the domain
-unsigned long long	cpuTime	
-the CPU time used in nanoseconds
-} 
+Max physical memory allocated to domain: 262144KiB = 262144KB
+Value returned from virDomainGetMaxMemory: 262144
+Memory left unused by domain: 49508kB
+Memory usable by domain:      241644kB
+
+So when 4 VMs are running, they're up in the 85% range
+of memory "used". When one's running, like 40%. I'm wondering if
+that percentage is unused/available and has nothing to do with 
+"max". As in if the percentage gets hgih, we just start giving
+the VM a bit more memory until it gets good.
 
 
+hmmm.. 
+maybe loop through them all.
+if r < 75%, take memory away.
+if r == 75% do nothin (or between 70 and 80)
+if r > 75%, give memory.
 
-**/
+***/
