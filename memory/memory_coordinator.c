@@ -11,15 +11,42 @@
 
 #define DEFAULT_DEBUG_VALUE 69
 
-double MEMORY_USAGE_RED_ALERT = 0.75;
+double MEMORY_USAGE_RED_ALERT = 75;
 
 int numOfDomains;
 virDomainPtr* allDomains;
 virConnectPtr hypervisor;
 
+typedef struct domainMemoryNeeds {
+  int domainNumber;
+  double domainUsageRatio;
+  unsigned long long memoryNeededToGetToThreshold; //total kb needed to get domainUsageRatio down to 0.75.
+} domainMemoryNeeds;
 
-int balanceMemory() {
-	int domainToGiveMemory = -1;
+
+
+/***
+
+It's okay to just give it to a domain from the host, I think. 
+If all of them are at 0.95 usage, we can't take from any.
+During downtime we can take from ones that aren't using their memory
+and give it to host.
+
+
+***/
+int domainToTakeFrom() {
+	return 0;
+}
+
+
+int giveAdditionalMemory(domainMemoryNeeds domainToGiveMemory) {
+	int res = virDomainSetMemory(allDomains[domainToGiveMemory.domainNumber],
+		  domainToGiveMemory.memoryNeededToGetToThreshold);
+	return res;
+}
+
+domainMemoryNeeds domainNeedsMemory() {
+	domainMemoryNeeds domainToGiveMemory = {-1,0.0,0};
 	double highestMemoryUsageRatio = 0.0;
 	for(int i = 0; i < numOfDomains; i++) {
 		virDomainMemoryStatPtr stats = calloc(VIR_DOMAIN_MEMORY_STAT_NR, sizeof(virDomainMemoryStatStruct));
@@ -41,20 +68,37 @@ int balanceMemory() {
 		// If the ratio is above 0.75, and this VM doesn't
 		// already have too much memory allocated, and it 
 		// has the worst memory ratio
-        double r = (float)unused/(float)(available);
+        double r = (100.0) - ((float)unused/(float)(available))*(100);
 		if (r >= MEMORY_USAGE_RED_ALERT && r >= highestMemoryUsageRatio) {
              highestMemoryUsageRatio = r;
-             domainToGiveMemory = i;
+             domainToGiveMemory.domainNumber = i;
+             domainToGiveMemory.domainUsageRatio = r;
+             domainToGiveMemory.memoryNeededToGetToThreshold = available + (-1)*((available*(MEMORY_USAGE_RED_ALERT-100))/100);
 		}
 
+	}
+	return domainToGiveMemory;
+}
+
+
+int balanceMemory() {
+	domainMemoryNeeds domainToGiveMemory = domainNeedsMemory();
+	
 		// What if a VM is using less than 0.75 of its memory?
 		// I guess leave it alone.
-	}
-	if (domainToGiveMemory == -1) {
+	if (domainToGiveMemory.domainNumber == -1) {
 		printf("No domain has above 0.75 memory usage.\n");
 		return 0;
 	}
-	printf("\nDomain %s to be given more memory.\n\n", virDomainGetName(allDomains[domainToGiveMemory]));
+
+    //int domainToTakeMemoryFrom = domainToTakeFrom(); // only to give to host
+
+	printf("\nDomain %s to be given more memory.\n\n", virDomainGetName(allDomains[domainToGiveMemory.domainNumber]));
+	printf("domainToGiveMemory.memoryNeededToGetToThreshold: %llu\n", domainToGiveMemory.memoryNeededToGetToThreshold);
+	    
+    int res = giveAdditionalMemory(domainToGiveMemory);
+    if (res == -1) printf("Failed to give the domain memory.\n");
+    else printf("Successfully gave the domain memory.\n");
 	return 0;
 
 
@@ -84,7 +128,7 @@ int printMemoryStats() {
 		printf("Memory usable by domain:      %llukB\n", available);
 		printf("Current balloon size:         %llukB\n", balloonSize);
 		printf("How much the balloon can be inflated without pushing the guest system to swap: %llukB\n", usable);
-		printf("Memory usage: %f\n", ((float)unused/(float)available));
+		printf("Memory usage: %f\n", (100.0) - ((float)unused/(float)(available))*(100));
 	}
 }
 
