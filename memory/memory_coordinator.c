@@ -13,7 +13,7 @@
 
 double MEMORY_USAGE_RED_ALERT = 80;
 int PAGE_SIZE_IN_KB = 4;
-int PAGES_TO_ALLOCATE_AT_ONCE = 2000;
+int PAGES_TO_ALLOCATE_AT_ONCE = 2800;
 
 int numOfDomains;
 virDomainPtr* allDomains;
@@ -157,7 +157,8 @@ int balanceMemoryExp() {
 			if (s.tag == VIR_DOMAIN_MEMORY_STAT_USABLE) usable = s.val;
 		}
 
-		
+		// this ratio might not be right. when the test starts usin less
+		//memory, this ratio doesn't go down.
         double r = (100.0) - ((float)unused/(float)(available))*(100);
 		if ( r <  MEMORY_USAGE_RED_ALERT ) takeMemoryAway(allDomains[i], balloonSize);
 		if ( r > MEMORY_USAGE_RED_ALERT ) giveMemory(allDomains[i], balloonSize);
@@ -166,8 +167,15 @@ int balanceMemoryExp() {
 }
 
 void giveMemory(virDomainPtr domain, unsigned long long balloonSize) {
+	char* domainName = virDomainGetName(domain);
+
+    if (virDomainGetMaxMemory(domain) >= (balloonSize + (PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE))) {
+    	printf("Domain %s cannot be given any more memory.\n", domainName);
+    	return;
+    }
+
 	// basing it off of balloon size works which makes no sense. whatever.
-	printf("Giving domain %s %i kB\n", virDomainGetName(domain), PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE);
+	printf("Giving domain %s %i kB\n", domainName, PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE);
 	//int res = virDomainSetMemory(domain, unused + (PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE));
 	//if (res != 0) printf("virDomainSetMemory failed.\n");
 	//int res = virDomainSetMemoryFlags(domain, available + (PAGE_SIZE_IN_KB*PAGES_TO_ALLOCATE_AT_ONCE), VIR_DOMAIN_AFFECT_LIVE);
@@ -198,7 +206,7 @@ int main(int argc, char * argv) {
       balanceMemoryExp();
       freeAllDomainPointers();
       virConnectClose(hypervisor);
-      sleep(5);	
+      sleep(2);	
   }
 }
 
