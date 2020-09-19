@@ -8,6 +8,8 @@
 #define BIT_SET(a,b) ((a) |= (1ULL<<(b)))
 
 int ONE_MILLION = 1000000;
+double UNBALANCED_PERCENT = 0.1; // If any CPU times are greater than the
+// average of all times plus this percent of average then we are unbalanced.
 
 int numOfDomains;
 virDomainPtr* allDomains;
@@ -18,9 +20,11 @@ int* vCpuMappings;
 virVcpuInfoPtr* allVCpuInfos;
 
 /***
-STATUS 9/13/2020:
-on 4 pCPUs test 5 seems like its good?
-pins do change somewhat. check it.
+STATUS 9/19/2020:
+All of the tests seem fine. Test 5 the pins DO change,
+but only in response to pertubations in the workload. 
+The README says test 5 workload should stay steady,
+but there are spikes between the vCPUS.
 **/
 int main(int argc, char *argv[]) {
 
@@ -38,9 +42,10 @@ int main(int argc, char *argv[]) {
 	printf("Sleep interval: %i\n", sleepInterval);
 
 	while (1) {
-		hypervisor = virConnectOpen(NULL);
+		hypervisor = virConnectOpen("qemu:///system");
 		balanceCPU(hypervisor);
 		for (int i = 0; i < numOfDomains; i++) virDomainFree(allDomains[i]);
+		free(allDomains);
 		virConnectClose(hypervisor);
 		sleep(sleepInterval);
 	}
@@ -59,10 +64,10 @@ int determineVCpuToMove(virDomainPtr *domainToMove, int vCpuMappings[], double t
 	for (int i = 0; i < numOfDomains; i++) {
 		virDomainGetVcpus(allDomains[i], vCpu, 1, NULL, 0);
 		hostCpus[vCpu->cpu] = hostCpus[vCpu->cpu] + 1;
+		free(vCpu);
 		vCpu = calloc(1, sizeof(virVcpuInfoPtr));
 	}
 	for (int i = 0; i < numOfHostCpus; i++ ) if (hostCpus[i] > 1) { candidatepCpu = i; break; }
-
 	int smallestvCpu;
 	virVcpuInfoPtr smallestVCpuInfo = calloc(1, sizeof(virVcpuInfoPtr));
 	virDomainPtr smallestDomain;
@@ -131,11 +136,8 @@ void balance() {
 
 int balanceCPU(virConnectPtr hypervisor) {
 	numOfDomains = virConnectNumOfDomains(hypervisor);
-	printf("\nNumber of domains: %i", numOfDomains);
 	allDomains = malloc(numOfDomains * sizeof(virDomainPtr));
 	int res = virConnectListAllDomains(hypervisor, &allDomains, VIR_CONNECT_LIST_DOMAINS_ACTIVE);
-
-
 	if (!isBalanced(hypervisor, numOfDomains)) balance();
 
 	return 0;
@@ -143,6 +145,9 @@ int balanceCPU(virConnectPtr hypervisor) {
 
 int isBalanced(virConnectPtr hypervisor, int numOfDomains) {
 	virVcpuInfoPtr vCpuInfo = malloc(sizeof(virVcpuInfo));
+
+
+  free(allVCpuInfos);
 	allVCpuInfos = calloc(numOfDomains, numOfDomains * sizeof(virVcpuInfo));
 	numOfHostCpus = virNodeGetCPUMap(hypervisor, NULL, NULL, 0);
 
@@ -151,6 +156,7 @@ int isBalanced(virConnectPtr hypervisor, int numOfDomains) {
 		 to the pCPU. The contents of the array at each index are
 		 the cumulative CPU time across all domains for that pCPU.
 		 **/
+	free(timeMappings);
 	timeMappings = calloc(numOfHostCpus, numOfHostCpus * sizeof(double));
 
 	/** Variable vCpuMappings is a map of total number of vCPUs
@@ -158,6 +164,7 @@ int isBalanced(virConnectPtr hypervisor, int numOfDomains) {
 		 the number assigned to the pCPU. The contents of the array
 		 at each index are the number of vCPUs executing on that pCPU.
 		 **/
+	free(vCpuMappings);
 	vCpuMappings = calloc(numOfHostCpus, numOfHostCpus * sizeof(int));
 
 	/** Populate the vCpuMappings, timeMappings, and allvCpuInfos data structures. **/
@@ -185,15 +192,14 @@ int isBalanced(virConnectPtr hypervisor, int numOfDomains) {
 	}
 	if (balanced && emptyCpus == 0 && pCpuWithMoreThanOnevCpu == 1) {
 		printf("\nThere are no empty pCPUs, and some pCPUs have more than one vCPU.\n");
-		printf("\nFinding balance based on time usage...\n");
+		printf(" Finding balance based on time usage...\n");
 		unsigned int averageTime;
 		// this shows that we're getting a pretty good estimate of pCPU usage here.
 		for (int i = 0; i < numOfHostCpus; i++) printf("pCPU %i time usage: %f\n", i, timeMappings[i]);
 		for (int i = 0; i < numOfHostCpus; i++) averageTime = averageTime + timeMappings[i];
 		averageTime = averageTime / numOfHostCpus;
 		printf("\nAverage time for pCPUs: %i", averageTime);
-		double unbalancedPercent = 0.1;
-		double threshold = averageTime + (averageTime * unbalancedPercent);
+		double threshold = averageTime + (averageTime * UNBALANCED_PERCENT);
 		for (int i = 0; i < numOfHostCpus; i++) if (timeMappings[i] > threshold) balanced = 0;
 		printf("\nThreshold time value over which system is unbalanced: %f\n", threshold);
 	}
