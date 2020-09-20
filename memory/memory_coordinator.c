@@ -11,10 +11,11 @@
 
 #define DEFAULT_DEBUG_VALUE 69
 
-double MEMORY_USAGE_RED_ALERT = 80; // Median of a range.
+/** (UnusedMemory / MaxMem) * 100, below this we are in danger of OOM**/
+double MIN_MEM_THRESHOLD_GUEST = 8.0;
 int PAGE_SIZE_IN_KB = 4;
-int PAGES_TO_ALLOCATE_AT_ONCE = 4500;
-const double MIN_MEM_AVAILABLE_ON_HOST = 0.15;
+int PAGES_TO_ALLOCATE_AT_ONCE = 15500;
+const double MIN_MEM_AVAILABLE_ON_HOST = 0.05;
 
 int numOfDomains;
 virDomainPtr* allDomains;
@@ -26,6 +27,7 @@ int printMemoryStats() {
 	for (int i = 0; i < numOfDomains; i++) {
 		virDomainMemoryStatPtr stats = calloc(VIR_DOMAIN_MEMORY_STAT_NR, sizeof(virDomainMemoryStatStruct));
 		printf("\nDomain: %s\n", virDomainGetName(allDomains[i]));
+		int maxMem = virDomainGetMaxMemory(allDomains[i]);
 		int numRet = virDomainMemoryStats(allDomains[i], stats, VIR_DOMAIN_MEMORY_STAT_NR, 0);
 		unsigned long long unused = DEFAULT_DEBUG_VALUE;
 		unsigned long long available = DEFAULT_DEBUG_VALUE;
@@ -42,10 +44,9 @@ int printMemoryStats() {
 		int m = virDomainGetMaxMemory(allDomains[i]);
 		printf("Value returned from virDomainGetMaxMemory: %fGB\n", m/(1024.0*1024));
 		printf("Memory left unused by domain: %llukB\n", unused);
-		printf("Memory usable by domain:      %llukB\n", available);
+		//printf("Memory usable by domain:      %llukB\n", available);
 		printf("Current balloon size:         %llukB\n", balloonSize);
-		//printf("How much the balloon can be inflated without pushing the guest system to swap: %llukB\n", usable);
-		printf("Memory usage: %f percent\n", (100.0) - ((float)unused / (float)(available)) * (100));
+	    printf("Memory actually available as a percent of maximum allowed: %f percent\n", ((float)unused / (float)(maxMem)) * (100));
 	}
 	printf("---------------------\n");
 }
@@ -55,29 +56,26 @@ void giveMemory(virDomainPtr domain, unsigned long long balloonSize) {
 	/** Before giveMemory is called, takeMemoryAway should have been called already.
 	  * This means any VM that could give up memory already has, and the host has
 	  * all of the memory it could get. **/
+	const char* domainName = virDomainGetName(domain);
 	virNodeInfoPtr nodeInfo = calloc(1, sizeof(virNodeInfo));
 	virNodeGetInfo(hypervisor, nodeInfo);
-
-	double freeMem = virNodeGetFreeMemory(hypervisor) / (1024.0); // kB
-	double totalMem = nodeInfo->memory; //kB
+    printf("Attempting to give domain %s %i kB\n", domainName, PAGE_SIZE_IN_KB * PAGES_TO_ALLOCATE_AT_ONCE);
+	double hostFreeMem = virNodeGetFreeMemory(hypervisor) / (1024.0); // kB
+	double hostTotalMem = nodeInfo->memory; //kB
 	free(nodeInfo);
-	if (freeMem / totalMem < MIN_MEM_AVAILABLE_ON_HOST) {
-		printf("Host free memory: %f percent. Less than %f memory available to host OS. Cannot give a VM more memory.\n", freeMem / totalMem, MIN_MEM_AVAILABLE_ON_HOST);
-		
+	if (hostFreeMem / hostTotalMem < MIN_MEM_AVAILABLE_ON_HOST) {
+		printf("%f Gb host free memory. %f Gb host total memory.\n", hostFreeMem/(1024*1024), hostTotalMem/(1024*1024));
+		printf("Host free memory: %f percent. Less than %f memory available to host OS. Cannot give a VM more memory.\n", hostFreeMem / hostTotalMem, MIN_MEM_AVAILABLE_ON_HOST);
 		return;
 	}
-	const char* domainName = virDomainGetName(domain);
 
-	if (virDomainGetMaxMemory(domain) >= (balloonSize + (PAGE_SIZE_IN_KB * PAGES_TO_ALLOCATE_AT_ONCE))) {
+	if (virDomainGetMaxMemory(domain) <= (balloonSize + (PAGE_SIZE_IN_KB * PAGES_TO_ALLOCATE_AT_ONCE))) {
 		printf("Domain %s cannot be given any more memory or it will exceed its maximum allowed.\n", domainName);
 		return;
 	}
 
-	// basing it off of balloon size works which makes no sense. whatever.
-	printf("Giving domain %s %i kB\n", domainName, PAGE_SIZE_IN_KB * PAGES_TO_ALLOCATE_AT_ONCE);
 	int res = virDomainSetMemoryFlags(domain, balloonSize + (PAGE_SIZE_IN_KB * PAGES_TO_ALLOCATE_AT_ONCE), VIR_DOMAIN_AFFECT_LIVE);
 	if (res != 0) printf("virDomainSetMemory failed.\n");
-
 	return;
 }
 
@@ -109,20 +107,9 @@ int balanceMemory() {
 			if (s.tag == VIR_DOMAIN_MEMORY_STAT_USABLE) usable = s.val;
 		}
 
-		// this ratio might not be right. when the test starts using less
-		//memory, this ratio doesn't go down.
-		/** 9-19-2020. r is a function of unused and available. But as r changes, we also
-		change "available", so this isn't necessarily correct. unused/vs max? idk**/
-/*
-Memory (VM: aos_vm3)  Actual [139.48046875], Unused: [53.38671875]
-Memory left unused by domain: 54668kB
-Current balloon size:         142828kB*/
- /** Here we see that in the output of "monitor", "actual" seems to be closer to what
- we call "current balloon size"
-
-		double r = (100.0) - ((float)unused / (float)(available)) * (100);
-		if ( r <  (MEMORY_USAGE_RED_ALERT - .10)) takeMemoryAway(allDomains[i], balloonSize);
-		if ( r > (MEMORY_USAGE_RED_ALERT + .10)) giveMemory(allDomains[i], balloonSize);
+		double r = ((float)unused / (float)(maxMem)) * (100);
+		if ( r > (MIN_MEM_THRESHOLD_GUEST + 5)) takeMemoryAway(allDomains[i], balloonSize);
+		if ( r < (MIN_MEM_THRESHOLD_GUEST)) giveMemory(allDomains[i], balloonSize);
 	}
 }
 
@@ -143,7 +130,7 @@ int main(int argc, char *argv[]) {
 		hypervisor = virConnectOpen("qemu:///system");
 		populateAllDomainsArray();
 		for (int i = 0; i < numOfDomains; i++) virDomainSetMemoryStatsPeriod(allDomains[i], 1, VIR_DOMAIN_AFFECT_LIVE);
-		sleep(1); // let stats period be set
+		sleep(1); // sleep to let stats period take effect maybe
 		printMemoryStats();
 		balanceMemory();
 		freeAllDomainPointers();
@@ -167,23 +154,20 @@ int freeAllDomainPointers() {
 }
 
 /***
-9-15-2020:
+9-20-2020:
 
-Max physical memory allocated to domain: 262144KiB = 262144KB
-Value returned from virDomainGetMaxMemory: 262144
-Memory left unused by domain: 49508kB
-Memory usable by domain:      241644kB
+Status of test cases ( with an interval of 1 second ):
 
-So when 4 VMs are running, they're up in the 85% range
-of memory "used". When one's running, like 40%. I'm wondering if
-that percentage is unused/available and has nothing to do with
-"max". As in if the percentage gets hgih, we just start giving
-the VM a bit more memory until it gets good.
+Test 1: 
 
-hmmm..
-maybe loop through them all.
-if r < 75%, take memory away.
-if r == 75% do nothin (or between 70 and 80)
-if r > 75%, give memory.
+The VM they run the test on slowly ramps up memory usage, and program gives the vm
+memory as needed. When it frees the memory, the VM gives it up to host. The other VMs
+don't give up memory though, because they don't have much allocated to them.
+
+Test 2:
+Test 2 seems to run as expected.
+
+Test 3:
+Test 3 seems to run as expected.
 
 ***/
